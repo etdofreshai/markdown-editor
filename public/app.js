@@ -81,6 +81,9 @@ function redo(){
 }
 function switchMode(next){ if(mode === 'pretty') markdown = htmlToMarkdown(pretty); else markdown = raw.value; mode = next; $('prettyPane').classList.toggle('hidden', mode!=='pretty'); $('rawPane').classList.toggle('hidden', mode!=='raw'); $('prettyBtn').classList.toggle('active', mode==='pretty'); $('rawBtn').classList.toggle('active', mode==='raw'); setMarkdown(markdown); }
 
+pretty.addEventListener('focusin', ()=>{ if(!suppress && mode==='pretty') pushUndo(); });
+raw.addEventListener('focusin', ()=>{ if(!suppress && mode==='raw') pushUndo(); });
+title.addEventListener('focusin', ()=>{ if(!suppress) pushUndo(); });
 pretty.addEventListener('beforeinput', (e)=>{ if(!suppress && e.inputType?.startsWith('history')) e.preventDefault(); else if(!suppress && mode==='pretty') pushUndo(); });
 raw.addEventListener('beforeinput', (e)=>{ if(!suppress && e.inputType?.startsWith('history')) e.preventDefault(); else if(!suppress && mode==='raw') pushUndo(); });
 title.addEventListener('beforeinput', ()=>{ if(!suppress) pushUndo(); });
@@ -98,4 +101,4 @@ $('prettyBtn').onclick=()=>switchMode('pretty'); $('rawBtn').onclick=()=>switchM
 $('promptBar').addEventListener('submit', async (e)=>{ e.preventDefault(); const text=prompt.value.trim(); if(!text) return; pushUndo(); prompt.value=''; chat.innerHTML = `<b>You:</b> ${text}<br><b>Codex:</b> editing…`; setStatus('Codex editing…'); try{ const d=await api(`/api/document/${docId}/prompt`,{method:'POST', body:JSON.stringify({prompt:text})}); suppress=true; title.value=d.title; suppress=false; await setMarkdown(d.markdown,d.html); chat.innerHTML = `<b>You:</b> ${text}<br><b>Codex:</b> ${d.message}`; setStatus('Saved'); }catch(e){ undoStack.pop(); chat.innerHTML = `<b>Prompt failed:</b> ${e.message||e.error}`; setStatus('Prompt failed'); }});
 prompt.addEventListener('keydown', e=>{ if(e.key==='Enter' && (e.metaKey||e.ctrlKey)) $('promptBar').requestSubmit(); });
 
-const d = await api(`/api/document/${docId}`); title.value=d.title; await setMarkdown(d.markdown,d.html); pushUndo(currentState()); undoStack.pop(); setStatus('Saved');
+const d = await api(`/api/document/${docId}`); title.value=d.title; await setMarkdown(d.markdown,d.html); setStatus('Saved');
