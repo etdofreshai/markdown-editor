@@ -3,6 +3,7 @@ const $ = (id) => document.getElementById(id);
 const title = $('title'), status = $('status'), pretty = $('prettyEditor'), raw = $('rawEditor'), chat = $('chatLog'), prompt = $('prompt'), createFileBtn = $('createFileBtn');
 let markdown = '', saveTimer = null, mode = 'pretty', suppress = false;
 let undoStack = [], redoStack = [], lastKnownState = null;
+let pageScrollBeforeEdit = 0;
 const HISTORY_LIMIT = 200;
 
 function currentState(){ return { title: title.value, markdown }; }
@@ -17,6 +18,11 @@ function pushUndo(state = currentState()){
 function noteChanged(){ const next = currentState(); if (lastKnownState && !sameState(lastKnownState, next)) pushUndo(lastKnownState); lastKnownState = { ...next }; }
 function isPersistent(){ return Boolean(docId); }
 function updateCreateButton(){ createFileBtn.textContent = isPersistent() ? 'Persistent File' : 'Create New File'; createFileBtn.disabled = isPersistent(); }
+function rememberPageScroll(){ pageScrollBeforeEdit = window.scrollY || document.documentElement.scrollTop || 0; }
+function restorePageScroll(){
+  const current = window.scrollY || document.documentElement.scrollTop || 0;
+  if (Math.abs(current - pageScrollBeforeEdit) > 2) window.scrollTo(0, pageScrollBeforeEdit);
+}
 
 function htmlToMarkdown(root){
   const walk = (node, ctx = {}) => {
@@ -90,10 +96,10 @@ async function createPersistentFile(){
 pretty.addEventListener('focusin', ()=>{ if(!suppress && mode==='pretty') pushUndo(); });
 raw.addEventListener('focusin', ()=>{ if(!suppress && mode==='raw') pushUndo(); });
 title.addEventListener('focusin', ()=>{ if(!suppress) pushUndo(); });
-pretty.addEventListener('beforeinput', (e)=>{ if(!suppress && e.inputType?.startsWith('history')) e.preventDefault(); else if(!suppress && mode==='pretty') pushUndo(); });
-raw.addEventListener('beforeinput', (e)=>{ if(!suppress && e.inputType?.startsWith('history')) e.preventDefault(); else if(!suppress && mode==='raw') pushUndo(); });
-title.addEventListener('beforeinput', ()=>{ if(!suppress) pushUndo(); });
-pretty.addEventListener('input',()=>{ if(mode==='pretty'){ markdown = htmlToMarkdown(pretty); raw.value = markdown; noteChanged(); scheduleSave(); }});
+pretty.addEventListener('beforeinput', (e)=>{ rememberPageScroll(); if(!suppress && e.inputType?.startsWith('history')) e.preventDefault(); else if(!suppress && mode==='pretty') pushUndo(); });
+raw.addEventListener('beforeinput', (e)=>{ rememberPageScroll(); if(!suppress && e.inputType?.startsWith('history')) e.preventDefault(); else if(!suppress && mode==='raw') pushUndo(); });
+title.addEventListener('beforeinput', ()=>{ rememberPageScroll(); if(!suppress) pushUndo(); });
+pretty.addEventListener('input',()=>{ if(mode==='pretty'){ markdown = htmlToMarkdown(pretty); raw.value = markdown; noteChanged(); scheduleSave(); requestAnimationFrame(restorePageScroll); }});
 pretty.addEventListener('copy', (e)=>{
   const copiedMarkdown = selectionToMarkdown();
   if (copiedMarkdown === null) return;
@@ -101,8 +107,8 @@ pretty.addEventListener('copy', (e)=>{
   e.clipboardData.setData('text/plain', copiedMarkdown);
   e.clipboardData.setData('text/markdown', copiedMarkdown);
 });
-raw.addEventListener('input',()=>{ markdown=raw.value; noteChanged(); scheduleSave(); });
-title.addEventListener('input', ()=>{ noteChanged(); scheduleSave(); });
+raw.addEventListener('input',()=>{ markdown=raw.value; noteChanged(); scheduleSave(); requestAnimationFrame(restorePageScroll); });
+title.addEventListener('input', ()=>{ noteChanged(); scheduleSave(); requestAnimationFrame(restorePageScroll); });
 document.addEventListener('keydown', (e)=>{ const mod = e.metaKey || e.ctrlKey; if (!mod || e.altKey) return; const key = e.key.toLowerCase(); if (key === 'z' && !e.shiftKey){ e.preventDefault(); undo(); } if ((key === 'z' && e.shiftKey) || key === 'y'){ e.preventDefault(); redo(); } });
 $('prettyBtn').onclick=()=>switchMode('pretty'); $('rawBtn').onclick=()=>switchMode('raw');
 createFileBtn.onclick=()=>createPersistentFile().catch(e=>setStatus(`Create failed: ${e.message||e.error}`));

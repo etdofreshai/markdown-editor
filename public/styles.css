@@ -10,6 +10,7 @@
   --line: #23304a;
 }
 * { box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
 body {
   margin: 0;
   background: radial-gradient(circle at top left, #14213e, #070b14 44%);
@@ -38,9 +39,9 @@ button { padding: 10px 14px; cursor: pointer; font-weight: 700; }
 button.active, button:hover { border-color: var(--accent); box-shadow: 0 0 22px rgba(110, 231, 255, .13); }
 .primaryAction { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #06101d; border: 0; }
 main { min-height: 0; flex: 1; display: flex; padding: 18px 18px 132px; }
-.pane { width: 100%; max-width: 1050px; margin: 0 auto; background: rgba(13, 20, 36, .88); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 22px 80px rgba(0,0,0,.25); overflow: hidden; }
+.pane { width: 100%; height: 100%; min-height: 0; display: flex; max-width: 1050px; margin: 0 auto; background: rgba(13, 20, 36, .88); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 22px 80px rgba(0,0,0,.25); overflow: hidden; }
 .hidden { display: none; }
-.pretty-editor { min-height: 100%; height: 100%; padding: 28px 34px; outline: 0; overflow: auto; }
+.pretty-editor { flex: 1; min-height: 0; height: auto; padding: 28px 34px; outline: 0; overflow: auto; overscroll-behavior: contain; scroll-behavior: auto; }
 .pretty-editor:focus { box-shadow: inset 0 0 0 1px var(--accent); }
 .pretty-editor h1, .pretty-editor h2, .pretty-editor h3 { line-height: 1.15; }
 .pretty-editor a { color: var(--accent); }
@@ -73,7 +74,7 @@ main { min-height: 0; flex: 1; display: flex; padding: 18px 18px 132px; }
   margin-bottom: .2em;
 }
 
-#rawEditor { width: 100%; height: 100%; min-height: calc(100vh - 230px); resize: none; padding: 24px; font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; outline: 0; background: #07101f; border: 0; border-radius: 18px; }
+#rawEditor { width: 100%; height: 100%; min-height: 0; resize: none; padding: 24px; font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; outline: 0; background: #07101f; border: 0; border-radius: 18px; overscroll-behavior: contain; }
 #promptBar { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 18px 16px; background: linear-gradient(180deg, rgba(7,11,20,.2), rgba(7,11,20,.98) 25%); border-top: 1px solid rgba(35,48,74,.65); }
 #chatLog { max-width: 1050px; margin: 0 auto 8px; color: var(--muted); font-size: 13px; max-height: 42px; overflow: auto; }
 .promptRow { max-width: 1050px; margin: 0 auto; display: flex; gap: 10px; align-items: stretch; }
