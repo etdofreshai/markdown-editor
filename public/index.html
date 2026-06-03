@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Markdown Editor</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Markdown Editor</h1>
+      <p id="status">Loading…</p>
+    </div>
+    <div class="actions">
+      <input id="title" aria-label="Document title" />
+      <button id="prettyBtn" class="active">Pretty</button>
+      <button id="rawBtn">Raw</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="prettyPane" class="pane">
+      <div id="prettyEditor" class="pretty-editor" contenteditable="true" spellcheck="true"></div>
+    </section>
+    <section id="rawPane" class="pane hidden">
+      <textarea id="rawEditor" spellcheck="false"></textarea>
+    </section>
+  </main>
+
+  <form id="promptBar">
+    <div id="chatLog" aria-live="polite"></div>
+    <div class="promptRow">
+      <textarea id="prompt" rows="2" placeholder="Ask Codex to edit the document… e.g. ‘turn this into a launch checklist’"></textarea>
+      <button id="sendPrompt" type="submit">Apply</button>
+    </div>
+  </form>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
