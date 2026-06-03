@@ -19,26 +19,41 @@ function isPersistent(){ return Boolean(docId); }
 function updateCreateButton(){ createFileBtn.textContent = isPersistent() ? 'Persistent File' : 'Create New File'; createFileBtn.disabled = isPersistent(); }
 
 function htmlToMarkdown(root){
-  const walk = (node) => {
+  const walk = (node, ctx = {}) => {
     if (node.nodeType === Node.TEXT_NODE) return node.textContent;
     if (node.nodeType !== Node.ELEMENT_NODE) return '';
-    const c = [...node.childNodes].map(walk).join('');
     const tag = node.tagName.toLowerCase();
-    if (tag === 'h1') return `# ${c.trim()}\n\n`;
-    if (tag === 'h2') return `## ${c.trim()}\n\n`;
-    if (tag === 'h3') return `### ${c.trim()}\n\n`;
-    if (tag === 'p' || tag === 'div') return `${c.trim()}\n\n`;
+    const childText = (nextCtx = ctx) => [...node.childNodes].map(child => walk(child, nextCtx)).join('');
+    if (tag === 'h1') return `# ${childText().trim()}\n\n`;
+    if (tag === 'h2') return `## ${childText().trim()}\n\n`;
+    if (tag === 'h3') return `### ${childText().trim()}\n\n`;
+    if (tag === 'p' || tag === 'div') return `${childText().trim()}\n\n`;
     if (tag === 'br') return '\n';
-    if (tag === 'strong' || tag === 'b') return `**${c}**`;
-    if (tag === 'em' || tag === 'i') return `*${c}*`;
-    if (tag === 'code') return node.parentElement?.tagName.toLowerCase()==='pre' ? c : `\`${c}\``;
-    if (tag === 'pre') return `\n\`\`\`\n${c.trim()}\n\`\`\`\n\n`;
-    if (tag === 'li') return `- ${c.trim()}\n`;
-    if (tag === 'ul' || tag === 'ol') return `${c}\n`;
-    if (tag === 'a') return `[${c}](${node.getAttribute('href') || ''})`;
-    return c;
+    if (tag === 'strong' || tag === 'b') return `**${childText()}**`;
+    if (tag === 'em' || tag === 'i') return `*${childText()}*`;
+    if (tag === 'code') return node.parentElement?.tagName.toLowerCase()==='pre' ? childText() : `\`${childText()}\``;
+    if (tag === 'pre') return `\n\`\`\`\n${childText().trim()}\n\`\`\`\n\n`;
+    if (tag === 'li') {
+      const marker = ctx.ordered ? `${ctx.index ?? 1}. ` : '- ';
+      return `${marker}${childText().trim().replace(/\n{2,}/g, '\n')}\n`;
+    }
+    if (tag === 'ul' || tag === 'ol') {
+      return [...node.children].map((child, i) => walk(child, { ordered: tag === 'ol', index: i + 1 })).join('') + '\n';
+    }
+    if (tag === 'a') return `[${childText()}](${node.getAttribute('href') || ''})`;
+    return childText();
   };
-  return [...root.childNodes].map(walk).join('').replace(/\n{3,}/g,'\n\n').trim() + '\n';
+  return [...root.childNodes].map(node => walk(node)).join('').replace(/\n{3,}/g,'\n\n').trim() + '\n';
+}
+function selectionToMarkdown(){
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return markdown;
+  const range = selection.getRangeAt(0);
+  if (!pretty.contains(range.commonAncestorContainer)) return null;
+  const fragment = range.cloneContents();
+  const container = document.createElement('div');
+  container.appendChild(fragment);
+  return htmlToMarkdown(container);
 }
 async function api(path, opts={}){ const r = await fetch(path, {headers:{'content-type':'application/json'}, ...opts}); if(!r.ok) throw await r.json().catch(()=>({error:r.statusText})); return r.json(); }
 async function render(md){ const r = await api('/api/render',{method:'POST', body:JSON.stringify({markdown:md})}); return r.html; }
@@ -79,6 +94,13 @@ pretty.addEventListener('beforeinput', (e)=>{ if(!suppress && e.inputType?.start
 raw.addEventListener('beforeinput', (e)=>{ if(!suppress && e.inputType?.startsWith('history')) e.preventDefault(); else if(!suppress && mode==='raw') pushUndo(); });
 title.addEventListener('beforeinput', ()=>{ if(!suppress) pushUndo(); });
 pretty.addEventListener('input',()=>{ if(mode==='pretty'){ markdown = htmlToMarkdown(pretty); raw.value = markdown; noteChanged(); scheduleSave(); }});
+pretty.addEventListener('copy', (e)=>{
+  const copiedMarkdown = selectionToMarkdown();
+  if (copiedMarkdown === null) return;
+  e.preventDefault();
+  e.clipboardData.setData('text/plain', copiedMarkdown);
+  e.clipboardData.setData('text/markdown', copiedMarkdown);
+});
 raw.addEventListener('input',()=>{ markdown=raw.value; noteChanged(); scheduleSave(); });
 title.addEventListener('input', ()=>{ noteChanged(); scheduleSave(); });
 document.addEventListener('keydown', (e)=>{ const mod = e.metaKey || e.ctrlKey; if (!mod || e.altKey) return; const key = e.key.toLowerCase(); if (key === 'z' && !e.shiftKey){ e.preventDefault(); undo(); } if ((key === 'z' && e.shiftKey) || key === 'y'){ e.preventDefault(); redo(); } });
