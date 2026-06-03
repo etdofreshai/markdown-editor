@@ -1,10 +1,17 @@
 let docId = location.pathname.startsWith('/d/') ? decodeURIComponent(location.pathname.split('/').filter(Boolean)[1] || '') : null;
 const $ = (id) => document.getElementById(id);
-const title = $('title'), status = $('status'), pretty = $('prettyEditor'), raw = $('rawEditor'), chat = $('chatLog'), prompt = $('prompt'), createFileBtn = $('createFileBtn');
+const title = $('title'), status = $('status'), pretty = $('prettyEditor'), raw = $('rawEditor'), chat = $('chatLog'), prompt = $('prompt'), createFileBtn = $('createFileBtn'), styleSelect = $('styleSelect');
 let markdown = '', saveTimer = null, mode = 'pretty', suppress = false;
 let undoStack = [], redoStack = [], lastKnownState = null;
 let pageScrollBeforeEdit = 0;
 const HISTORY_LIMIT = 200;
+const STYLE_KEY = 'markdown-editor-style';
+function applyStyle(style){
+  document.body.dataset.style = style;
+  styleSelect.value = style;
+  localStorage.setItem(STYLE_KEY, style);
+}
+applyStyle(localStorage.getItem(STYLE_KEY) || 'aurora');
 
 function currentState(){ return { title: title.value, markdown }; }
 function sameState(a,b){ return a?.title === b?.title && a?.markdown === b?.markdown; }
@@ -146,6 +153,7 @@ raw.addEventListener('input',()=>{ markdown=raw.value; noteChanged(); scheduleSa
 title.addEventListener('input', ()=>{ noteChanged(); scheduleSave(); requestAnimationFrame(restorePageScroll); });
 document.addEventListener('keydown', (e)=>{ const mod = e.metaKey || e.ctrlKey; if (!mod || e.altKey) return; const key = e.key.toLowerCase(); if (key === 'z' && !e.shiftKey){ e.preventDefault(); undo(); } if ((key === 'z' && e.shiftKey) || key === 'y'){ e.preventDefault(); redo(); } });
 $('prettyBtn').onclick=()=>switchMode('pretty'); $('rawBtn').onclick=()=>switchMode('raw');
+styleSelect.addEventListener('change', () => applyStyle(styleSelect.value));
 createFileBtn.onclick=()=>createPersistentFile().catch(e=>setStatus(`Create failed: ${e.message||e.error}`));
 $('promptBar').addEventListener('submit', async (e)=>{ e.preventDefault(); const text=prompt.value.trim(); if(!text) return; pushUndo(); prompt.value=''; chat.innerHTML = `<b>You:</b> ${text}<br><b>Codex:</b> editing…`; setStatus('Codex editing…'); try{ const endpoint = isPersistent() ? `/api/document/${docId}/prompt` : '/api/prompt'; const body = isPersistent() ? {prompt:text} : {prompt:text,title:title.value,markdown}; const d=await api(endpoint,{method:'POST', body:JSON.stringify(body)}); suppress=true; title.value=d.title; suppress=false; await setMarkdown(d.markdown,d.html); lastKnownState = currentState(); chat.innerHTML = `<b>You:</b> ${text}<br><b>Codex:</b> ${d.message}`; setStatus(isPersistent() ? 'Saved' : 'Updated draft'); }catch(e){ undoStack.pop(); chat.innerHTML = `<b>Prompt failed:</b> ${e.message||e.error}`; setStatus('Prompt failed'); }});
 prompt.addEventListener('keydown', e=>{ if(e.key==='Enter' && (e.metaKey||e.ctrlKey)) $('promptBar').requestSubmit(); });
