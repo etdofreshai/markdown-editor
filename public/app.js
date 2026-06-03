@@ -1,6 +1,6 @@
-const docId = 'default';
+let docId = location.pathname.startsWith('/d/') ? decodeURIComponent(location.pathname.split('/').filter(Boolean)[1] || '') : null;
 const $ = (id) => document.getElementById(id);
-const title = $('title'), status = $('status'), pretty = $('prettyEditor'), raw = $('rawEditor'), chat = $('chatLog'), prompt = $('prompt');
+const title = $('title'), status = $('status'), pretty = $('prettyEditor'), raw = $('rawEditor'), chat = $('chatLog'), prompt = $('prompt'), createFileBtn = $('createFileBtn');
 let markdown = '', saveTimer = null, mode = 'pretty', suppress = false;
 let undoStack = [], redoStack = [], lastKnownState = null;
 const HISTORY_LIMIT = 200;
@@ -14,11 +14,9 @@ function pushUndo(state = currentState()){
   if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
   redoStack = [];
 }
-function noteChanged(){
-  const next = currentState();
-  if (lastKnownState && !sameState(lastKnownState, next)) pushUndo(lastKnownState);
-  lastKnownState = { ...next };
-}
+function noteChanged(){ const next = currentState(); if (lastKnownState && !sameState(lastKnownState, next)) pushUndo(lastKnownState); lastKnownState = { ...next }; }
+function isPersistent(){ return Boolean(docId); }
+function updateCreateButton(){ createFileBtn.textContent = isPersistent() ? 'Persistent File' : 'Create New File'; createFileBtn.disabled = isPersistent(); }
 
 function htmlToMarkdown(root){
   const walk = (node) => {
@@ -44,48 +42,35 @@ function htmlToMarkdown(root){
 }
 async function api(path, opts={}){ const r = await fetch(path, {headers:{'content-type':'application/json'}, ...opts}); if(!r.ok) throw await r.json().catch(()=>({error:r.statusText})); return r.json(); }
 async function render(md){ const r = await api('/api/render',{method:'POST', body:JSON.stringify({markdown:md})}); return r.html; }
-function setStatus(t){ status.textContent = t; }
-async function setMarkdown(md, html, { updatePretty = true } = {}){
-  markdown = md;
-  raw.value = md;
-  if (updatePretty && mode === 'pretty') pretty.innerHTML = html ?? await render(md);
-}
-function scheduleSave(){ clearTimeout(saveTimer); setStatus('Unsaved changes…'); saveTimer=setTimeout(saveNow, 600); }
+function setStatus(t){ status.textContent = isPersistent() ? t : `${t} · Ephemeral draft`; }
+async function setMarkdown(md, html, { updatePretty = true } = {}){ markdown = md; raw.value = md; if (updatePretty && mode === 'pretty') pretty.innerHTML = html ?? await render(md); }
+function scheduleSave(){ clearTimeout(saveTimer); if(!isPersistent()){ setStatus('Not saved yet'); return; } setStatus('Unsaved changes…'); saveTimer=setTimeout(saveNow, 600); }
 async function saveNow(){
-  if(suppress) return;
+  if(suppress || !isPersistent()) return;
   try{
     const d=await api(`/api/document/${docId}`,{method:'PUT', body:JSON.stringify({title:title.value, markdown})});
-    title.value = d.title;
-    markdown = d.markdown;
-    raw.value = d.markdown;
-    // Do not re-render the active pretty editor after every save; replacing its DOM wipes browser undo state.
+    title.value = d.title; markdown = d.markdown; raw.value = d.markdown;
     if (mode !== 'pretty') pretty.innerHTML = d.html;
     setStatus('Saved');
   }catch(e){ setStatus(`Save failed: ${e.message||e.error}`); }
 }
-async function applyState(state, { save = true } = {}){
-  suppress = true;
-  title.value = state.title;
-  suppress = false;
-  await setMarkdown(state.markdown, undefined, { updatePretty: true });
-  lastKnownState = { ...state };
-  if (save) scheduleSave();
-}
-function undo(){
-  const prev = undoStack.pop();
-  if (!prev) return;
-  redoStack.push(currentState());
-  applyState(prev);
-  setStatus('Undone — saving…');
-}
-function redo(){
-  const next = redoStack.pop();
-  if (!next) return;
-  undoStack.push(currentState());
-  applyState(next);
-  setStatus('Redone — saving…');
-}
+async function applyState(state, { save = true } = {}){ suppress = true; title.value = state.title; suppress = false; await setMarkdown(state.markdown, undefined, { updatePretty: true }); lastKnownState = { ...state }; if (save) scheduleSave(); }
+function undo(){ const prev = undoStack.pop(); if (!prev) return; redoStack.push(currentState()); applyState(prev); setStatus(isPersistent() ? 'Undone — saving…' : 'Undone'); }
+function redo(){ const next = redoStack.pop(); if (!next) return; undoStack.push(currentState()); applyState(next); setStatus(isPersistent() ? 'Redone — saving…' : 'Redone'); }
 function switchMode(next){ if(mode === 'pretty') markdown = htmlToMarkdown(pretty); else markdown = raw.value; mode = next; $('prettyPane').classList.toggle('hidden', mode!=='pretty'); $('rawPane').classList.toggle('hidden', mode!=='raw'); $('prettyBtn').classList.toggle('active', mode==='pretty'); $('rawBtn').classList.toggle('active', mode==='raw'); setMarkdown(markdown); }
+
+async function createPersistentFile(){
+  if (mode === 'pretty') markdown = htmlToMarkdown(pretty); else markdown = raw.value;
+  setStatus('Creating file…');
+  const d = await api('/api/document', { method:'POST', body: JSON.stringify({ title:title.value, markdown }) });
+  docId = d.id;
+  history.pushState({}, '', d.url);
+  await setMarkdown(d.markdown, d.html);
+  title.value = d.title;
+  lastKnownState = currentState();
+  updateCreateButton();
+  setStatus('Saved');
+}
 
 pretty.addEventListener('focusin', ()=>{ if(!suppress && mode==='pretty') pushUndo(); });
 raw.addEventListener('focusin', ()=>{ if(!suppress && mode==='raw') pushUndo(); });
@@ -96,15 +81,10 @@ title.addEventListener('beforeinput', ()=>{ if(!suppress) pushUndo(); });
 pretty.addEventListener('input',()=>{ if(mode==='pretty'){ markdown = htmlToMarkdown(pretty); raw.value = markdown; noteChanged(); scheduleSave(); }});
 raw.addEventListener('input',()=>{ markdown=raw.value; noteChanged(); scheduleSave(); });
 title.addEventListener('input', ()=>{ noteChanged(); scheduleSave(); });
-document.addEventListener('keydown', (e)=>{
-  const mod = e.metaKey || e.ctrlKey;
-  if (!mod || e.altKey) return;
-  const key = e.key.toLowerCase();
-  if (key === 'z' && !e.shiftKey){ e.preventDefault(); undo(); }
-  if ((key === 'z' && e.shiftKey) || key === 'y'){ e.preventDefault(); redo(); }
-});
+document.addEventListener('keydown', (e)=>{ const mod = e.metaKey || e.ctrlKey; if (!mod || e.altKey) return; const key = e.key.toLowerCase(); if (key === 'z' && !e.shiftKey){ e.preventDefault(); undo(); } if ((key === 'z' && e.shiftKey) || key === 'y'){ e.preventDefault(); redo(); } });
 $('prettyBtn').onclick=()=>switchMode('pretty'); $('rawBtn').onclick=()=>switchMode('raw');
-$('promptBar').addEventListener('submit', async (e)=>{ e.preventDefault(); const text=prompt.value.trim(); if(!text) return; pushUndo(); prompt.value=''; chat.innerHTML = `<b>You:</b> ${text}<br><b>Codex:</b> editing…`; setStatus('Codex editing…'); try{ const d=await api(`/api/document/${docId}/prompt`,{method:'POST', body:JSON.stringify({prompt:text})}); suppress=true; title.value=d.title; suppress=false; await setMarkdown(d.markdown,d.html); chat.innerHTML = `<b>You:</b> ${text}<br><b>Codex:</b> ${d.message}`; setStatus('Saved'); }catch(e){ undoStack.pop(); chat.innerHTML = `<b>Prompt failed:</b> ${e.message||e.error}`; setStatus('Prompt failed'); }});
+createFileBtn.onclick=()=>createPersistentFile().catch(e=>setStatus(`Create failed: ${e.message||e.error}`));
+$('promptBar').addEventListener('submit', async (e)=>{ e.preventDefault(); const text=prompt.value.trim(); if(!text) return; pushUndo(); prompt.value=''; chat.innerHTML = `<b>You:</b> ${text}<br><b>Codex:</b> editing…`; setStatus('Codex editing…'); try{ const endpoint = isPersistent() ? `/api/document/${docId}/prompt` : '/api/prompt'; const body = isPersistent() ? {prompt:text} : {prompt:text,title:title.value,markdown}; const d=await api(endpoint,{method:'POST', body:JSON.stringify(body)}); suppress=true; title.value=d.title; suppress=false; await setMarkdown(d.markdown,d.html); lastKnownState = currentState(); chat.innerHTML = `<b>You:</b> ${text}<br><b>Codex:</b> ${d.message}`; setStatus(isPersistent() ? 'Saved' : 'Updated draft'); }catch(e){ undoStack.pop(); chat.innerHTML = `<b>Prompt failed:</b> ${e.message||e.error}`; setStatus('Prompt failed'); }});
 prompt.addEventListener('keydown', e=>{ if(e.key==='Enter' && (e.metaKey||e.ctrlKey)) $('promptBar').requestSubmit(); });
 
-const d = await api(`/api/document/${docId}`); title.value=d.title; await setMarkdown(d.markdown,d.html); lastKnownState = currentState(); setStatus('Saved');
+const d = await api(isPersistent() ? `/api/document/${docId}` : '/api/ephemeral'); title.value=d.title; await setMarkdown(d.markdown,d.html); lastKnownState = currentState(); updateCreateButton(); setStatus(isPersistent() ? 'Saved' : 'Ready');

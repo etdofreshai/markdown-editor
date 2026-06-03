@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-test('server persists markdown and renders html', async () => {
+test('ephemeral default and created session documents work', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'md-editor-'));
   const port = 3900 + Math.floor(Math.random()*1000);
   const child = spawn(process.execPath, ['server.js'], { cwd: process.cwd(), env: { ...process.env, PORT: String(port), DATA_DIR: dir, SQLITE_PATH: path.join(dir, 'db.sqlite') }, stdio: ['ignore','pipe','pipe'] });
@@ -18,14 +18,23 @@ test('server persists markdown and renders html', async () => {
         setTimeout(tick, 100);
       }; tick();
     });
-    let r = await fetch(`http://127.0.0.1:${port}/api/document/default`);
+    let r = await fetch(`http://127.0.0.1:${port}/api/ephemeral`);
     assert.equal(r.status, 200);
+    let draft = await r.json();
+    assert.equal(draft.ephemeral, true);
+    assert.match(draft.markdown, /ephemeral draft/i);
+
+    r = await fetch(`http://127.0.0.1:${port}/api/document`, { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ title:'Test', markdown:'# Hello\n\n**world**' }) });
+    assert.equal(r.status, 201);
     let doc = await r.json();
-    assert.match(doc.markdown, /Markdown Editor/);
-    r = await fetch(`http://127.0.0.1:${port}/api/document/default`, { method:'PUT', headers:{'content-type':'application/json'}, body: JSON.stringify({ title:'Test', markdown:'# Hello\n\n**world**' }) });
+    assert.match(doc.id, /^[A-Za-z0-9_-]+$/);
+    assert.equal(doc.url, `/d/${doc.id}`);
+    assert.match(doc.html, /<strong>world<\/strong>/);
+
+    r = await fetch(`http://127.0.0.1:${port}/api/document/${doc.id}`, { method:'PUT', headers:{'content-type':'application/json'}, body: JSON.stringify({ title:'Updated', markdown:'# Updated' }) });
     assert.equal(r.status, 200);
     doc = await r.json();
-    assert.match(doc.html, /<strong>world<\/strong>/);
+    assert.equal(doc.title, 'Updated');
     assert.ok(fs.existsSync(path.join(dir, 'db.sqlite')));
   } finally {
     child.kill('SIGTERM');

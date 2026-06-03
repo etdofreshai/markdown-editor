@@ -3,6 +3,7 @@ import Database from 'better-sqlite3';
 import OpenAI from 'openai';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { marked } from 'marked';
 import { JSDOM } from 'jsdom';
 import createDOMPurify from 'dompurify';
@@ -34,9 +35,7 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 `);
 
-const defaultMarkdown = `# Markdown Editor\n\nStart writing in the pretty editor, raw markdown editor, or ask the prompt box at the bottom to change this document.\n\n- Pretty markdown is the default.\n- Raw markdown is always one click away.\n- The document auto-saves to SQLite.\n`;
-const insertDefault = db.prepare('INSERT OR IGNORE INTO documents (id, title, markdown) VALUES (?, ?, ?)');
-insertDefault.run('default', 'Untitled Markdown', defaultMarkdown);
+const defaultMarkdown = `# Markdown Editor\n\nStart writing in this ephemeral draft. Click **Create New File** to get a persistent SQLite-backed link with a session id in the URL.\n\n- Pretty markdown is the default.\n- Raw markdown is always one click away.\n- Prompt edits work before and after creating a file.\n`;
 
 const window = new JSDOM('').window;
 const DOMPurify = createDOMPurify(window);
@@ -50,11 +49,21 @@ app.use(express.json({ limit: '3mb' }));
 app.use(express.static('public', { extensions: ['html'] }));
 
 const getDoc = db.prepare('SELECT id, title, markdown, created_at, updated_at FROM documents WHERE id = ?');
+const createDoc = db.prepare('INSERT INTO documents (id, title, markdown) VALUES (?, ?, ?)');
 const saveDoc = db.prepare(`UPDATE documents SET title = ?, markdown = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`);
 const addMsg = db.prepare('INSERT INTO messages (document_id, role, content) VALUES (?, ?, ?)');
 const listMsgs = db.prepare('SELECT role, content, created_at FROM messages WHERE document_id = ? ORDER BY id DESC LIMIT ?');
 
 app.get('/healthz', (_req, res) => res.json({ ok: true, db: DB_PATH }));
+app.get('/api/ephemeral', (_req, res) => res.json({ id: null, title: 'Ephemeral Markdown', markdown: defaultMarkdown, html: renderMarkdown(defaultMarkdown), ephemeral: true }));
+app.post('/api/document', (req, res) => {
+  const id = crypto.randomBytes(9).toString('base64url');
+  const title = String(req.body.title || 'Untitled Markdown').slice(0, 200);
+  const markdown = String(req.body.markdown ?? defaultMarkdown);
+  createDoc.run(id, title, markdown);
+  const doc = getDoc.get(id);
+  res.status(201).json({ ...doc, html: renderMarkdown(doc.markdown), url: `/d/${id}` });
+});
 app.get('/api/document/:id', (req, res) => {
   const doc = getDoc.get(req.params.id);
   if (!doc) return res.status(404).json({ error: 'document_not_found' });
@@ -77,14 +86,12 @@ function extractMarkdown(text) {
   return (fence ? fence[1] : text).trim();
 }
 
-app.post('/api/document/:id/prompt', async (req, res) => {
-  const doc = getDoc.get(req.params.id);
-  if (!doc) return res.status(404).json({ error: 'document_not_found' });
-  const prompt = String(req.body.prompt || '').trim();
-  if (!prompt) return res.status(400).json({ error: 'prompt_required' });
-  addMsg.run(doc.id, 'user', prompt);
+async function editMarkdownWithPrompt(markdown, prompt) {
   if (!process.env.OPENAI_API_KEY && !process.env.CODEX_API_KEY) {
-    return res.status(501).json({ error: 'ai_not_configured', message: 'Set OPENAI_API_KEY or CODEX_API_KEY in Dokploy env to enable prompt editing.' });
+    const err = new Error('Set OPENAI_API_KEY or CODEX_API_KEY in Dokploy env to enable prompt editing.');
+    err.status = 501;
+    err.code = 'ai_not_configured';
+    throw err;
   }
   const client = new OpenAI({ apiKey: process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY, baseURL: OPENAI_BASE_URL });
   const system = 'You are an expert markdown editor embedded in a web app. Apply the user request to the provided markdown document. Return ONLY the complete updated markdown document. Do not explain. Preserve intent and formatting unless asked to change it.';
@@ -92,15 +99,44 @@ app.post('/api/document/:id/prompt', async (req, res) => {
     model: DEFAULT_MODEL,
     messages: [
       { role: 'system', content: system },
-      { role: 'user', content: `Current markdown document:\n\n${doc.markdown}\n\nUser request:\n${prompt}\n\nReturn the full updated markdown only.` }
+      { role: 'user', content: `Current markdown document:\n\n${markdown}\n\nUser request:\n${prompt}\n\nReturn the full updated markdown only.` }
     ]
   });
-  const updated = extractMarkdown(completion.choices?.[0]?.message?.content || doc.markdown);
-  saveDoc.run(doc.title, updated, doc.id);
-  addMsg.run(doc.id, 'assistant', 'Updated the document.');
-  const next = getDoc.get(doc.id);
-  res.json({ ...next, html: renderMarkdown(next.markdown), message: 'Updated the document.' });
+  return extractMarkdown(completion.choices?.[0]?.message?.content || markdown);
+}
+
+app.post('/api/prompt', async (req, res) => {
+  const prompt = String(req.body.prompt || '').trim();
+  if (!prompt) return res.status(400).json({ error: 'prompt_required' });
+  const markdown = String(req.body.markdown ?? '');
+  try {
+    const updated = await editMarkdownWithPrompt(markdown, prompt);
+    res.json({ title: String(req.body.title || 'Ephemeral Markdown').slice(0, 200), markdown: updated, html: renderMarkdown(updated), message: 'Updated the draft.' });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.code, message: err.message });
+    throw err;
+  }
 });
+
+app.post('/api/document/:id/prompt', async (req, res) => {
+  const doc = getDoc.get(req.params.id);
+  if (!doc) return res.status(404).json({ error: 'document_not_found' });
+  const prompt = String(req.body.prompt || '').trim();
+  if (!prompt) return res.status(400).json({ error: 'prompt_required' });
+  addMsg.run(doc.id, 'user', prompt);
+  try {
+    const updated = await editMarkdownWithPrompt(doc.markdown, prompt);
+    saveDoc.run(doc.title, updated, doc.id);
+    addMsg.run(doc.id, 'assistant', 'Updated the document.');
+    const next = getDoc.get(doc.id);
+    res.json({ ...next, html: renderMarkdown(next.markdown), message: 'Updated the document.' });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.code, message: err.message });
+    throw err;
+  }
+});
+
+app.get('/d/:id', (_req, res) => res.sendFile(path.join(process.cwd(), 'public', 'index.html')));
 
 app.use((err, _req, res, _next) => {
   console.error(err);
