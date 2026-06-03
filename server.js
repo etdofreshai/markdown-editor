@@ -11,7 +11,7 @@ import createDOMPurify from 'dompurify';
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.DATA_DIR || '/data';
 const DB_PATH = process.env.SQLITE_PATH || path.join(DATA_DIR, 'markdown-editor.sqlite');
-const DEFAULT_MODEL = process.env.CODEX_MODEL || process.env.OPENAI_MODEL || 'gpt-5.1-codex';
+const DEFAULT_MODEL = process.env.AI_MODEL || process.env.OPENAI_MODEL || process.env.CODEX_MODEL || 'gpt-5.1-codex';
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || undefined;
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
@@ -88,7 +88,7 @@ function extractMarkdown(text) {
 
 async function editMarkdownWithPrompt(markdown, prompt) {
   if (!process.env.OPENAI_API_KEY && !process.env.CODEX_API_KEY) {
-    const err = new Error('Set OPENAI_API_KEY or CODEX_API_KEY in Dokploy env to enable prompt editing.');
+    const err = new Error('Set an AI API key in Dokploy env to enable prompt editing.');
     err.status = 501;
     err.code = 'ai_not_configured';
     throw err;
