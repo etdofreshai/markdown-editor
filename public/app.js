@@ -2,6 +2,18 @@ const docId = 'default';
 const $ = (id) => document.getElementById(id);
 const title = $('title'), status = $('status'), pretty = $('prettyEditor'), raw = $('rawEditor'), chat = $('chatLog'), prompt = $('prompt');
 let markdown = '', saveTimer = null, mode = 'pretty', suppress = false;
+let undoStack = [], redoStack = [];
+const HISTORY_LIMIT = 200;
+
+function currentState(){ return { title: title.value, markdown }; }
+function sameState(a,b){ return a?.title === b?.title && a?.markdown === b?.markdown; }
+function pushUndo(state = currentState()){
+  const last = undoStack[undoStack.length - 1];
+  if (sameState(last, state)) return;
+  undoStack.push({ ...state });
+  if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+  redoStack = [];
+}
 
 function htmlToMarkdown(root){
   const walk = (node) => {
@@ -28,16 +40,62 @@ function htmlToMarkdown(root){
 async function api(path, opts={}){ const r = await fetch(path, {headers:{'content-type':'application/json'}, ...opts}); if(!r.ok) throw await r.json().catch(()=>({error:r.statusText})); return r.json(); }
 async function render(md){ const r = await api('/api/render',{method:'POST', body:JSON.stringify({markdown:md})}); return r.html; }
 function setStatus(t){ status.textContent = t; }
-async function setMarkdown(md, html){ markdown = md; raw.value = md; if (mode === 'pretty') pretty.innerHTML = html ?? await render(md); }
+async function setMarkdown(md, html, { updatePretty = true } = {}){
+  markdown = md;
+  raw.value = md;
+  if (updatePretty && mode === 'pretty') pretty.innerHTML = html ?? await render(md);
+}
 function scheduleSave(){ clearTimeout(saveTimer); setStatus('Unsaved changes…'); saveTimer=setTimeout(saveNow, 600); }
-async function saveNow(){ if(suppress) return; try{ const d=await api(`/api/document/${docId}`,{method:'PUT', body:JSON.stringify({title:title.value, markdown})}); await setMarkdown(d.markdown, d.html); setStatus('Saved'); }catch(e){ setStatus(`Save failed: ${e.message||e.error}`); }}
+async function saveNow(){
+  if(suppress) return;
+  try{
+    const d=await api(`/api/document/${docId}`,{method:'PUT', body:JSON.stringify({title:title.value, markdown})});
+    title.value = d.title;
+    markdown = d.markdown;
+    raw.value = d.markdown;
+    // Do not re-render the active pretty editor after every save; replacing its DOM wipes browser undo state.
+    if (mode !== 'pretty') pretty.innerHTML = d.html;
+    setStatus('Saved');
+  }catch(e){ setStatus(`Save failed: ${e.message||e.error}`); }
+}
+async function applyState(state, { save = true } = {}){
+  suppress = true;
+  title.value = state.title;
+  suppress = false;
+  await setMarkdown(state.markdown, undefined, { updatePretty: true });
+  if (save) scheduleSave();
+}
+function undo(){
+  const prev = undoStack.pop();
+  if (!prev) return;
+  redoStack.push(currentState());
+  applyState(prev);
+  setStatus('Undone — saving…');
+}
+function redo(){
+  const next = redoStack.pop();
+  if (!next) return;
+  undoStack.push(currentState());
+  applyState(next);
+  setStatus('Redone — saving…');
+}
 function switchMode(next){ if(mode === 'pretty') markdown = htmlToMarkdown(pretty); else markdown = raw.value; mode = next; $('prettyPane').classList.toggle('hidden', mode!=='pretty'); $('rawPane').classList.toggle('hidden', mode!=='raw'); $('prettyBtn').classList.toggle('active', mode==='pretty'); $('rawBtn').classList.toggle('active', mode==='raw'); setMarkdown(markdown); }
 
+pretty.addEventListener('beforeinput', (e)=>{ if(!suppress && e.inputType?.startsWith('history')) e.preventDefault(); else if(!suppress && mode==='pretty') pushUndo(); });
+raw.addEventListener('beforeinput', (e)=>{ if(!suppress && e.inputType?.startsWith('history')) e.preventDefault(); else if(!suppress && mode==='raw') pushUndo(); });
+title.addEventListener('beforeinput', ()=>{ if(!suppress) pushUndo(); });
 pretty.addEventListener('input',()=>{ if(mode==='pretty'){ markdown = htmlToMarkdown(pretty); raw.value = markdown; scheduleSave(); }});
 raw.addEventListener('input',()=>{ markdown=raw.value; scheduleSave(); });
 title.addEventListener('input', scheduleSave);
+document.addEventListener('keydown', (e)=>{
+  const mod = e.metaKey || e.ctrlKey;
+  if (!mod || e.altKey) return;
+  const key = e.key.toLowerCase();
+  if (key === 'z' && !e.shiftKey){ e.preventDefault(); undo(); }
+  if ((key === 'z' && e.shiftKey) || key === 'y'){ e.preventDefault(); redo(); }
+});
 $('prettyBtn').onclick=()=>switchMode('pretty'); $('rawBtn').onclick=()=>switchMode('raw');
-$('promptBar').addEventListener('submit', async (e)=>{ e.preventDefault(); const text=prompt.value.trim(); if(!text) return; prompt.value=''; chat.innerHTML = `<b>You:</b> ${text}<br><b>Codex:</b> editing…`; setStatus('Codex editing…'); try{ const d=await api(`/api/document/${docId}/prompt`,{method:'POST', body:JSON.stringify({prompt:text})}); suppress=true; title.value=d.title; suppress=false; await setMarkdown(d.markdown,d.html); chat.innerHTML = `<b>You:</b> ${text}<br><b>Codex:</b> ${d.message}`; setStatus('Saved'); }catch(e){ chat.innerHTML = `<b>Prompt failed:</b> ${e.message||e.error}`; setStatus('Prompt failed'); }});
+$('promptBar').addEventListener('submit', async (e)=>{ e.preventDefault(); const text=prompt.value.trim(); if(!text) return; pushUndo(); prompt.value=''; chat.innerHTML = `<b>You:</b> ${text}<br><b>Codex:</b> editing…`; setStatus('Codex editing…'); try{ const d=await api(`/api/document/${docId}/prompt`,{method:'POST', body:JSON.stringify({prompt:text})}); suppress=true; title.value=d.title; suppress=false; await setMarkdown(d.markdown,d.html); chat.innerHTML = `<b>You:</b> ${text}<br><b>Codex:</b> ${d.message}`; setStatus('Saved'); }catch(e){ undoStack.pop(); chat.innerHTML = `<b>Prompt failed:</b> ${e.message||e.error}`; setStatus('Prompt failed'); }});
 prompt.addEventListener('keydown', e=>{ if(e.key==='Enter' && (e.metaKey||e.ctrlKey)) $('promptBar').requestSubmit(); });
 
-const d = await api(`/api/document/${docId}`); title.value=d.title; await setMarkdown(d.markdown,d.html); setStatus('Saved');
+const d = await api(`/api/document/${docId}`); title.value=d.title; await setMarkdown(d.markdown,d.html); pushUndo(currentState()); undoStack.pop(); setStatus('Saved');
