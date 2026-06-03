@@ -2,7 +2,7 @@ const docId = 'default';
 const $ = (id) => document.getElementById(id);
 const title = $('title'), status = $('status'), pretty = $('prettyEditor'), raw = $('rawEditor'), chat = $('chatLog'), prompt = $('prompt');
 let markdown = '', saveTimer = null, mode = 'pretty', suppress = false;
-let undoStack = [], redoStack = [];
+let undoStack = [], redoStack = [], lastKnownState = null;
 const HISTORY_LIMIT = 200;
 
 function currentState(){ return { title: title.value, markdown }; }
@@ -13,6 +13,11 @@ function pushUndo(state = currentState()){
   undoStack.push({ ...state });
   if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
   redoStack = [];
+}
+function noteChanged(){
+  const next = currentState();
+  if (lastKnownState && !sameState(lastKnownState, next)) pushUndo(lastKnownState);
+  lastKnownState = { ...next };
 }
 
 function htmlToMarkdown(root){
@@ -63,6 +68,7 @@ async function applyState(state, { save = true } = {}){
   title.value = state.title;
   suppress = false;
   await setMarkdown(state.markdown, undefined, { updatePretty: true });
+  lastKnownState = { ...state };
   if (save) scheduleSave();
 }
 function undo(){
@@ -87,9 +93,9 @@ title.addEventListener('focusin', ()=>{ if(!suppress) pushUndo(); });
 pretty.addEventListener('beforeinput', (e)=>{ if(!suppress && e.inputType?.startsWith('history')) e.preventDefault(); else if(!suppress && mode==='pretty') pushUndo(); });
 raw.addEventListener('beforeinput', (e)=>{ if(!suppress && e.inputType?.startsWith('history')) e.preventDefault(); else if(!suppress && mode==='raw') pushUndo(); });
 title.addEventListener('beforeinput', ()=>{ if(!suppress) pushUndo(); });
-pretty.addEventListener('input',()=>{ if(mode==='pretty'){ markdown = htmlToMarkdown(pretty); raw.value = markdown; scheduleSave(); }});
-raw.addEventListener('input',()=>{ markdown=raw.value; scheduleSave(); });
-title.addEventListener('input', scheduleSave);
+pretty.addEventListener('input',()=>{ if(mode==='pretty'){ markdown = htmlToMarkdown(pretty); raw.value = markdown; noteChanged(); scheduleSave(); }});
+raw.addEventListener('input',()=>{ markdown=raw.value; noteChanged(); scheduleSave(); });
+title.addEventListener('input', ()=>{ noteChanged(); scheduleSave(); });
 document.addEventListener('keydown', (e)=>{
   const mod = e.metaKey || e.ctrlKey;
   if (!mod || e.altKey) return;
@@ -101,4 +107,4 @@ $('prettyBtn').onclick=()=>switchMode('pretty'); $('rawBtn').onclick=()=>switchM
 $('promptBar').addEventListener('submit', async (e)=>{ e.preventDefault(); const text=prompt.value.trim(); if(!text) return; pushUndo(); prompt.value=''; chat.innerHTML = `<b>You:</b> ${text}<br><b>Codex:</b> editing…`; setStatus('Codex editing…'); try{ const d=await api(`/api/document/${docId}/prompt`,{method:'POST', body:JSON.stringify({prompt:text})}); suppress=true; title.value=d.title; suppress=false; await setMarkdown(d.markdown,d.html); chat.innerHTML = `<b>You:</b> ${text}<br><b>Codex:</b> ${d.message}`; setStatus('Saved'); }catch(e){ undoStack.pop(); chat.innerHTML = `<b>Prompt failed:</b> ${e.message||e.error}`; setStatus('Prompt failed'); }});
 prompt.addEventListener('keydown', e=>{ if(e.key==='Enter' && (e.metaKey||e.ctrlKey)) $('promptBar').requestSubmit(); });
 
-const d = await api(`/api/document/${docId}`); title.value=d.title; await setMarkdown(d.markdown,d.html); setStatus('Saved');
+const d = await api(`/api/document/${docId}`); title.value=d.title; await setMarkdown(d.markdown,d.html); lastKnownState = currentState(); setStatus('Saved');
