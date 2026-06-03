@@ -61,6 +61,29 @@ function selectionToMarkdown(){
   container.appendChild(fragment);
   return htmlToMarkdown(container);
 }
+function prettySelectionMarkdownOffset(){
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return null;
+  const range = selection.getRangeAt(0);
+  if (!pretty.contains(range.startContainer)) return null;
+  const before = document.createRange();
+  before.setStart(pretty, 0);
+  before.setEnd(range.startContainer, range.startOffset);
+  const container = document.createElement('div');
+  container.appendChild(before.cloneContents());
+  return Math.min(htmlToMarkdown(container).length, markdown.length);
+}
+function focusRawAtOffset(offset){
+  if (typeof offset !== 'number') return;
+  const safeOffset = Math.max(0, Math.min(offset, raw.value.length));
+  raw.focus({ preventScroll: true });
+  raw.setSelectionRange(safeOffset, safeOffset);
+  const before = raw.value.slice(0, safeOffset);
+  const line = before.split('\n').length - 1;
+  const lineHeight = parseFloat(getComputedStyle(raw).lineHeight) || 22;
+  const targetTop = Math.max(0, line * lineHeight - raw.clientHeight / 2);
+  raw.scrollTop = targetTop;
+}
 async function api(path, opts={}){ const r = await fetch(path, {headers:{'content-type':'application/json'}, ...opts}); if(!r.ok) throw await r.json().catch(()=>({error:r.statusText})); return r.json(); }
 async function render(md){ const r = await api('/api/render',{method:'POST', body:JSON.stringify({markdown:md})}); return r.html; }
 function setStatus(t){ status.textContent = isPersistent() ? t : `${t} · Ephemeral draft`; }
@@ -78,7 +101,19 @@ async function saveNow(){
 async function applyState(state, { save = true } = {}){ suppress = true; title.value = state.title; suppress = false; await setMarkdown(state.markdown, undefined, { updatePretty: true }); lastKnownState = { ...state }; if (save) scheduleSave(); }
 function undo(){ const prev = undoStack.pop(); if (!prev) return; redoStack.push(currentState()); applyState(prev); setStatus(isPersistent() ? 'Undone — saving…' : 'Undone'); }
 function redo(){ const next = redoStack.pop(); if (!next) return; undoStack.push(currentState()); applyState(next); setStatus(isPersistent() ? 'Redone — saving…' : 'Redone'); }
-function switchMode(next){ if(mode === 'pretty') markdown = htmlToMarkdown(pretty); else markdown = raw.value; mode = next; $('prettyPane').classList.toggle('hidden', mode!=='pretty'); $('rawPane').classList.toggle('hidden', mode!=='raw'); $('prettyBtn').classList.toggle('active', mode==='pretty'); $('rawBtn').classList.toggle('active', mode==='raw'); setMarkdown(markdown); }
+function switchMode(next){
+  if (mode === next) return;
+  const rawOffset = mode === 'pretty' && next === 'raw' ? prettySelectionMarkdownOffset() : null;
+  if(mode === 'pretty') markdown = htmlToMarkdown(pretty); else markdown = raw.value;
+  mode = next;
+  $('prettyPane').classList.toggle('hidden', mode!=='pretty');
+  $('rawPane').classList.toggle('hidden', mode!=='raw');
+  $('prettyBtn').classList.toggle('active', mode==='pretty');
+  $('rawBtn').classList.toggle('active', mode==='raw');
+  setMarkdown(markdown).then(() => {
+    if (mode === 'raw' && rawOffset !== null) requestAnimationFrame(() => focusRawAtOffset(rawOffset));
+  });
+}
 
 async function createPersistentFile(){
   if (mode === 'pretty') markdown = htmlToMarkdown(pretty); else markdown = raw.value;
